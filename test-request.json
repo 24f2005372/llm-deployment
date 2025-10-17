@@ -1,0 +1,14 @@
+{
+  "email": "24f2005372@ds.study.iitm.ac.in",
+  "secret": "llamadeployment",
+  "task": "test-app-001",
+  "round": 1,
+  "nonce": "test-nonce-123",
+  "brief": "Create a simple page that displays 'Hello World' in an h1 tag",
+  "checks": [
+    "Page has an h1 tag",
+    "h1 contains the text 'Hello World'"
+  ],
+  "evaluation_url": "https://httpbin.org/post",
+  "attachments": []
+}
