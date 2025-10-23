@@ -5,6 +5,14 @@ const { Octokit } = require('@octokit/rest');
 const app = express();
 app.use(express.json({ limit: '50mb' }));
 
+app.get('/', (req, res) => {
+  res.json({ 
+    status: 'running',
+    message: 'LLM Deployment API is active',
+    timestamp: new Date().toISOString()
+  });
+});
+
 const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
 
 const MIT_LICENSE = `MIT License
