@@ -190,7 +190,8 @@ app.post('/build', async (req, res) => {
 
     const code = await generateCode(brief, checks, attachments);
 
-    const repoName = `${task}-r${round}`;
+    const uniqueId = nonce || Date.now();
+    const repoName = `${task}-r${round}-${uniqueId}`;
     const repoInfo = await createGitHubRepo(repoName, code, brief, checks);
 
     console.log('✅ Repository created:', repoInfo.repo_url);
