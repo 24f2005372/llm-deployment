@@ -53,7 +53,7 @@ ${attachments.length > 0 ? `\nAttachments provided:\n${attachmentText}` : ''}
 
 Return ONLY valid HTML code with inline CSS and JavaScript. Make it functional and complete.`;
 
-try {
+  try {
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -64,13 +64,13 @@ try {
         model: 'llama-3.3-70b-versatile',
         messages: [{ role: 'user', content: prompt }],
         max_tokens: 4000
-      })
+      }),
+      timeout: 30000 // 30 second timeout
     });
 
     const data = await response.json();
     
     console.log('API Response Status:', response.status);
-    console.log('API Response:', JSON.stringify(data, null, 2));
     
     if (data.error) {
       throw new Error(`Groq API Error: ${data.error.message}`);
@@ -88,18 +88,19 @@ try {
 }
 
 async function createGitHubRepo(repoName, code, brief, checks) {
-  const repo = await octokit.repos.createForAuthenticatedUser({
-    name: repoName,
-    description: brief.substring(0, 100),
-    auto_init: false,
-    private: false
-  });
-
   const owner = process.env.GITHUB_USERNAME;
+  
+  try {
+    const repo = await octokit.repos.createForAuthenticatedUser({
+      name: repoName,
+      description: brief.substring(0, 100),
+      auto_init: false,
+      private: false
+    });
 
-  await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise(resolve => setTimeout(resolve, 2000));
 
-  const readme = `# ${repoName}
+    const readme = `# ${repoName}
 
 ## Summary
 ${brief}
@@ -118,45 +119,49 @@ ${checks.map(c => `- ${c}`).join('\n')}
 ## License
 MIT License`;
 
-  await octokit.repos.createOrUpdateFileContents({
-    owner,
-    repo: repoName,
-    path: 'README.md',
-    message: 'Add README',
-    content: Buffer.from(readme).toString('base64')
-  });
-
-  await octokit.repos.createOrUpdateFileContents({
-    owner,
-    repo: repoName,
-    path: 'LICENSE',
-    message: 'Add MIT license',
-    content: Buffer.from(MIT_LICENSE).toString('base64')
-  });
-
-  const fileResponse = await octokit.repos.createOrUpdateFileContents({
-    owner,
-    repo: repoName,
-    path: 'index.html',
-    message: 'Add application code',
-    content: Buffer.from(code).toString('base64')
-  });
-
-  try {
-    await octokit.repos.createPagesSite({
+    await octokit.repos.createOrUpdateFileContents({
       owner,
       repo: repoName,
-      source: { branch: 'main', path: '/' }
+      path: 'README.md',
+      message: 'Add README',
+      content: Buffer.from(readme).toString('base64')
     });
-  } catch (error) {
-    console.log('Pages setup may need manual enabling:', error.message);
-  }
 
-  return {
-    repo_url: repo.data.html_url,
-    commit_sha: fileResponse.data.commit.sha,
-    pages_url: `https://${owner}.github.io/${repoName}/`
-  };
+    await octokit.repos.createOrUpdateFileContents({
+      owner,
+      repo: repoName,
+      path: 'LICENSE',
+      message: 'Add MIT license',
+      content: Buffer.from(MIT_LICENSE).toString('base64')
+    });
+
+    const fileResponse = await octokit.repos.createOrUpdateFileContents({
+      owner,
+      repo: repoName,
+      path: 'index.html',
+      message: 'Add application code',
+      content: Buffer.from(code).toString('base64')
+    });
+
+    try {
+      await octokit.repos.createPagesSite({
+        owner,
+        repo: repoName,
+        source: { branch: 'main', path: '/' }
+      });
+    } catch (error) {
+      console.log('Pages setup may need manual enabling:', error.message);
+    }
+
+    return {
+      repo_url: repo.data.html_url,
+      commit_sha: fileResponse.data.commit.sha,
+      pages_url: `https://${owner}.github.io/${repoName}/`
+    };
+  } catch (error) {
+    console.error('Error creating GitHub repo:', error);
+    throw error;
+  }
 }
 
 async function notifyEvaluator(evaluationUrl, payload, retries = 5) {
@@ -165,59 +170,115 @@ async function notifyEvaluator(evaluationUrl, payload, retries = 5) {
       const response = await fetch(evaluationUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        timeout: 10000 // 10 second timeout
       });
 
       if (response.ok) {
         console.log('✅ Evaluator notified successfully');
-        return;
+        return true;
       }
+      
+      console.log(`Evaluator response status: ${response.status}`);
     } catch (error) {
-      console.log(`Attempt ${i + 1} failed:`, error.message);
+      console.log(`Notify attempt ${i + 1} failed:`, error.message);
     }
 
-    const delay = Math.pow(2, i) * 1000;
-    await new Promise(resolve => setTimeout(resolve, delay));
+    if (i < retries - 1) {
+      const delay = Math.pow(2, i) * 1000;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
   }
   console.error('❌ Failed to notify evaluator after all retries');
+  return false;
 }
 
+// CRITICAL FIX: Process and respond synchronously
 app.post('/build', async (req, res) => {
-  console.log('📬 Received request');
-
-  if (req.body.secret !== process.env.MY_SECRET) {
-    return res.status(403).json({ error: 'Invalid secret' });
-  }
-
-  res.status(200).json({ message: 'Request accepted, processing...' });
+  const startTime = Date.now();
+  console.log('📬 Received build request');
 
   try {
+    // Validate secret
+    if (req.body.secret !== process.env.MY_SECRET) {
+      console.log('❌ Invalid secret');
+      return res.status(403).json({ error: 'Invalid secret' });
+    }
+
     const { email, task, round, nonce, brief, checks, evaluation_url, attachments = [] } = req.body;
 
     console.log(`Building app for task: ${task}, round: ${round}`);
 
-    const code = await generateCode(brief, checks, attachments);
+    // Validate required fields
+    if (!email || !task || !round || !brief || !checks || !evaluation_url) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
 
+    // Generate code
+    console.log('🤖 Generating code...');
+    const code = await generateCode(brief, checks, attachments);
+    console.log('✅ Code generated');
+
+    // Create GitHub repo
+    console.log('📦 Creating GitHub repository...');
     const uniqueId = nonce || Date.now();
     const repoName = `${task}-r${round}-${uniqueId}`;
     const repoInfo = await createGitHubRepo(repoName, code, brief, checks);
-
     console.log('✅ Repository created:', repoInfo.repo_url);
 
-    await notifyEvaluator(evaluation_url, {
+    // Prepare response payload
+    const responsePayload = {
       email,
       task,
       round,
       nonce,
-      ...repoInfo
+      repo_url: repoInfo.repo_url,
+      commit_sha: repoInfo.commit_sha,
+      pages_url: repoInfo.pages_url
+    };
+
+    // Notify evaluator (async, but we'll wait a bit)
+    console.log('📤 Notifying evaluator...');
+    notifyEvaluator(evaluation_url, responsePayload).catch(err => 
+      console.error('Error notifying evaluator:', err)
+    );
+
+    const elapsedTime = Date.now() - startTime;
+    console.log(`✅ Request completed in ${elapsedTime}ms`);
+
+    // Send success response to the evaluator
+    return res.status(200).json({
+      message: 'Build completed successfully',
+      ...responsePayload,
+      processing_time: elapsedTime
     });
 
   } catch (error) {
-    console.error('❌ Error:', error.message);
+    const elapsedTime = Date.now() - startTime;
+    console.error('❌ Error processing build:', error);
+    console.error('Stack trace:', error.stack);
+    
+    return res.status(500).json({
+      error: 'Build failed',
+      message: error.message,
+      processing_time: elapsedTime
+    });
   }
 });
 
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
+// CRITICAL FIX: Bind to 0.0.0.0 for Render
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`GitHub Username: ${process.env.GITHUB_USERNAME || 'NOT SET'}`);
 });
